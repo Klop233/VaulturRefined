@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { api, registerAndLogin } from "./helpers"
+import { api, login, registerAndLogin, registerUser } from "./helpers"
 
 const ORG = {
 	name: "Acme Corp",
@@ -114,6 +114,68 @@ describe("organizations", () => {
 			await api(token, "GET", `/api/organizations/${org.id}/details`)
 		).json()) as Record<string, any>
 		expect(details.data.some((cph: any) => cph.id === cipher.id)).toBe(true)
+	})
+
+	it("does not expose organization vault details to a regular member", async () => {
+		const memberEmail = `vault-reader-${crypto.randomUUID()}@acme.test`
+		const memberHash = `hash-${memberEmail}`
+		const { access_token: ownerToken } = await registerAndLogin()
+		const memberRegistration = await registerUser({
+			email: memberEmail,
+			name: "Regular Member",
+			masterPasswordHash: memberHash,
+			key: "2.memberKey|iv==",
+			keys: { publicKey: "member-public", encryptedPrivateKey: "2.memberPrivate|iv==" }
+		})
+		expect(memberRegistration.status).toBe(200)
+		const memberLogin = await login(memberEmail, memberHash)
+		expect(memberLogin.status).toBe(200)
+		const { access_token: memberToken } = (await memberLogin.json()) as { access_token: string }
+
+		const org = await createOrg(ownerToken)
+		const invite = await api(ownerToken, "POST", `/api/organizations/${org.id}/users/invite`, {
+			emails: [memberEmail],
+			type: 2,
+			accessAll: false,
+			collections: [],
+			groups: []
+		})
+		expect(invite.status).toBe(200)
+		const members = (await (
+			await api(ownerToken, "GET", `/api/organizations/${org.id}/users`)
+		).json()) as Record<string, any>
+		const member = members.data.find((row: any) => row.email === memberEmail)
+		expect(member).toBeTruthy()
+		const confirm = await api(
+			ownerToken,
+			"POST",
+			`/api/organizations/${org.id}/users/${member.id}/confirm`,
+			{ key: "2.memberOrgKey|iv==" }
+		)
+		expect(confirm.status).toBe(200)
+
+		const collections = (await (
+			await api(ownerToken, "GET", `/api/organizations/${org.id}/collections`)
+		).json()) as Record<string, any>
+		const cipher = await api(ownerToken, "POST", "/api/ciphers/create", {
+			cipher: {
+				type: 1,
+				name: "2.privateOrgCipher|iv==",
+				organizationId: org.id,
+				login: { username: "2.u|iv==", uris: [] }
+			},
+			collectionIds: [collections.data[0].id]
+		})
+		expect(cipher.status).toBe(200)
+
+		const orgDetails = await api(memberToken, "GET", `/api/organizations/${org.id}/details`)
+		expect(orgDetails.status).toBe(404)
+		const cipherDetails = await api(
+			memberToken,
+			"GET",
+			`/api/ciphers/organization-details?organizationId=${org.id}`
+		)
+		expect(cipherDetails.status).toBe(404)
 	})
 
 	it("returns organization keys", async () => {

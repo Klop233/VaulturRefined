@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm"
 import { Hono } from "hono"
 import type { Context } from "hono"
+import { bodyLimit } from "hono/body-limit"
 import { deleteCookie, getCookie, setCookie } from "hono/cookie"
 
 import { basicClaims, decodeJwt, encodeJwt, issuer } from "../auth/jwt"
@@ -22,13 +23,14 @@ import {
 	type User
 } from "../db"
 import type { AppEnv } from "../env"
-import { err, errJson } from "../error"
+import { err, errJson, errorBody } from "../error"
 import { findDeviceByRefreshToken, getOrCreateDevice, touchDevice } from "../services/devices"
 import { logUserEvent } from "../services/events"
 import { createMailer, mail, type Mailer } from "../services/mail"
 import { masterPasswordPolicy } from "../services/policies"
 import {
 	checkLoginRateLimit,
+	checkRegistrationRateLimit,
 	checkUserLoginFailureLimit,
 	recordUserLoginFailure
 } from "../services/ratelimit"
@@ -45,6 +47,17 @@ import { DeviceType, EventType, KdfType, MembershipStatus } from "../shared"
 import { ci, constantTimeEqualStr, normalizeEmail, randomBytes, uuid } from "../util"
 
 export const identityRoutes = new Hono<AppEnv>()
+
+// Identity bootstrap requests are small JSON/form payloads. Bound them before
+// Hono parses the body so an unauthenticated caller cannot consume Worker
+// memory with an arbitrarily large request. The registration payload is larger
+// because it carries the client's encrypted key material; 64 KiB leaves ample
+// room for current Bitwarden clients while still rejecting abuse.
+const rejectOversizedBody = (c: Context<AppEnv>) => c.json(errorBody("Payload Too Large"), 413)
+const connectTokenBodyLimit = bodyLimit({ maxSize: 16 * 1024, onError: rejectOversizedBody })
+const preloginBodyLimit = bodyLimit({ maxSize: 8 * 1024, onError: rejectOversizedBody })
+const verificationBodyLimit = bodyLimit({ maxSize: 8 * 1024, onError: rejectOversizedBody })
+const registrationBodyLimit = bodyLimit({ maxSize: 64 * 1024, onError: rejectOversizedBody })
 
 // ---------------------------------------------------------------------------
 // POST /identity/connect/token
@@ -110,7 +123,7 @@ function checkPresent(data: ConnectData, fields: (keyof ConnectData)[]): void {
 	}
 }
 
-identityRoutes.post("/connect/token", async (c) => {
+identityRoutes.post("/connect/token", connectTokenBodyLimit, async (c) => {
 	const body = await c.req.parseBody()
 	const form: Record<string, string> = {}
 	for (const [k, v] of Object.entries(body)) if (typeof v === "string") form[k] = v
@@ -698,6 +711,7 @@ async function organizationApiKeyLogin(
 // ---------------------------------------------------------------------------
 
 async function prelogin(c: Context<AppEnv>) {
+	await checkRegistrationRateLimit(c.env.VAULTUR_KV, c.get("config"), c.get("ip"), "prelogin")
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
 	const email = String(ci(body, "email") ?? "")
 	const db = c.get("db")
@@ -710,8 +724,8 @@ async function prelogin(c: Context<AppEnv>) {
 		kdfParallelism: user?.clientKdfParallelism ?? null
 	})
 }
-identityRoutes.post("/accounts/prelogin", prelogin)
-identityRoutes.post("/accounts/prelogin/password", prelogin)
+identityRoutes.post("/accounts/prelogin", preloginBodyLimit, prelogin)
+identityRoutes.post("/accounts/prelogin/password", preloginBodyLimit, prelogin)
 
 interface RegisterVerifyClaims {
 	sub: string
@@ -738,50 +752,59 @@ interface EmergencyInviteClaims {
 	[k: string]: unknown
 }
 
-identityRoutes.post("/accounts/register/send-verification-email", async (c) => {
-	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
-	const email = normalizeEmail(String(ci(body, "email") ?? ""))
-	const name = (ci<string>(body, "name") ?? null) as string | null
-	const db = c.get("db")
-	const config = c.get("config")
-	const mailer = createMailer(c.env.VAULTUR_EMAIL, config)
+identityRoutes.post(
+	"/accounts/register/send-verification-email",
+	verificationBodyLimit,
+	async (c) => {
+		const config = c.get("config")
+		await checkRegistrationRateLimit(c.env.VAULTUR_KV, config, c.get("ip"), "verification")
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+		const email = normalizeEmail(String(ci(body, "email") ?? ""))
+		const name = (ci<string>(body, "name") ?? null) as string | null
+		const db = c.get("db")
+		const mailer = createMailer(c.env.VAULTUR_EMAIL, config)
 
-	const invited = await db.query.invitations.findFirst({ where: eq(invitations.email, email) })
-	if (!(isSignupAllowed(config, email) || (!mailer.enabled && invited))) {
-		err("Registration not allowed or user already exists")
-	}
-	if (!loginAllowed(config, email)) err("Registration not allowed or user already exists")
-
-	const shouldSendMail = mailer.enabled && config.signupsVerify
-	const token = await encodeJwt(
-		c.env.JWT_SECRET,
-		basicClaims({
-			domain: config.domain,
-			kind: "register_verify",
-			sub: email,
-			ttlSeconds: 30 * 60,
-			extra: { name, verified: shouldSendMail }
-		})
-	)
-
-	if (shouldSendMail) {
-		const existing = await findUserByEmail(db, email)
-		if (!existing?.privateKey) {
-			await mail.registerVerifyEmail(mailer, config, email, token)
+		const invited = await db.query.invitations.findFirst({ where: eq(invitations.email, email) })
+		if (!(isSignupAllowed(config, email) || (!mailer.enabled && invited))) {
+			err("Registration not allowed or user already exists")
 		}
-		return c.body(null, 204)
-	}
-	// The iOS app reads this response as raw bytes rather than JSON (see
-	// StartRegistrationResponseModel in the official client), so a JSON-quoted
-	// string corrupts the token with literal quote characters. Android/browser/web
-	// parse it as JSON, so only iOS gets the unquoted form.
-	const deviceType = Number.parseInt(c.req.header("Device-Type") ?? "", 10)
-	if (deviceType === DeviceType.Ios) return c.text(token)
-	return c.json(token)
-})
+		if (!loginAllowed(config, email)) err("Registration not allowed or user already exists")
 
-identityRoutes.post("/accounts/register", async (c) => registerHandler(c, false))
-identityRoutes.post("/accounts/register/finish", async (c) => registerHandler(c, true))
+		const shouldSendMail = mailer.enabled && config.signupsVerify
+		const token = await encodeJwt(
+			c.env.JWT_SECRET,
+			basicClaims({
+				domain: config.domain,
+				kind: "register_verify",
+				sub: email,
+				ttlSeconds: 30 * 60,
+				extra: { name, verified: shouldSendMail }
+			})
+		)
+
+		if (shouldSendMail) {
+			const existing = await findUserByEmail(db, email)
+			if (!existing?.privateKey) {
+				await mail.registerVerifyEmail(mailer, config, email, token)
+			}
+			return c.body(null, 204)
+		}
+		// The iOS app reads this response as raw bytes rather than JSON (see
+		// StartRegistrationResponseModel in the official client), so a JSON-quoted
+		// string corrupts the token with literal quote characters. Android/browser/web
+		// parse it as JSON, so only iOS gets the unquoted form.
+		const deviceType = Number.parseInt(c.req.header("Device-Type") ?? "", 10)
+		if (deviceType === DeviceType.Ios) return c.text(token)
+		return c.json(token)
+	}
+)
+
+identityRoutes.post("/accounts/register", registrationBodyLimit, async (c) =>
+	registerHandler(c, false)
+)
+identityRoutes.post("/accounts/register/finish", registrationBodyLimit, async (c) =>
+	registerHandler(c, true)
+)
 
 function isSignupAllowed(config: Config, email: string): boolean {
 	if (config.signupsDomainsWhitelist.length > 0) {
@@ -792,9 +815,10 @@ function isSignupAllowed(config: Config, email: string): boolean {
 }
 
 async function registerHandler(c: Ctx, emailVerification: boolean) {
+	const config = c.get("config")
+	await checkRegistrationRateLimit(c.env.VAULTUR_KV, config, c.get("ip"), "register")
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
 	const db = c.get("db")
-	const config = c.get("config")
 	const mailer = createMailer(c.env.VAULTUR_EMAIL, config)
 
 	const email = normalizeEmail(String(ci(body, "email") ?? ""))

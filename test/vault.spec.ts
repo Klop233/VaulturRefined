@@ -203,6 +203,18 @@ describe("vault", () => {
 		expect(after.status).toBe(401)
 	})
 
+	it("does not issue email-change tokens when mail is disabled", async () => {
+		const session = await registerAndLogin()
+		const res = await api(session.access_token, "POST", "/api/accounts/email-token", {
+			newEmail: "new-address@vaultur.dev",
+			masterPasswordHash: TEST_USER.masterPasswordHash
+		})
+		expect(res.status).toBe(400)
+		expect(
+			((await res.json()) as { errorModel: { message: string } }).errorModel.message
+		).toContain("email sending")
+	})
+
 	it("equivalent domains: read and update", async () => {
 		const session = await registerAndLogin()
 		const token = session.access_token

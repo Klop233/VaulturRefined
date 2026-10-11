@@ -15,6 +15,7 @@ export const iconRoutes = new Hono<AppEnv>()
 
 const MAX_ICON_BYTES = 5 * 1024 * 1024
 const NEGATIVE_TTL = 24 * 60 * 60
+const MAX_REDIRECTS = 3
 
 function isValidDomain(domain: string): boolean {
 	return isSafeFetchHost(domain)
@@ -89,12 +90,8 @@ async function fetchIcon(
 
 	let iconUrl: string | null = null
 	try {
-		const page = await fetch(`https://${domain}/`, {
-			headers,
-			signal: AbortSignal.timeout(5000),
-			redirect: "follow"
-		})
-		if (page.ok) {
+		const page = await fetchSafe(`https://${domain}/`, headers)
+		if (page?.ok) {
 			const html = await page.text()
 			const href = extractIconHref(html)
 			if (href) iconUrl = new URL(href, `https://${domain}/`).toString()
@@ -105,11 +102,8 @@ async function fetchIcon(
 	if (!iconUrl) iconUrl = `https://${domain}/favicon.ico`
 
 	try {
-		const res = await fetch(iconUrl, {
-			headers,
-			signal: AbortSignal.timeout(5000),
-			redirect: "follow"
-		})
+		const res = await fetchSafe(iconUrl, headers)
+		if (!res) return null
 		if (!res.ok) return null
 		const contentType = res.headers.get("Content-Type") ?? "image/x-icon"
 		if (!contentType.startsWith("image/")) return null
@@ -119,4 +113,58 @@ async function fetchIcon(
 	} catch {
 		return null
 	}
+}
+
+/**
+ * Fetch an icon resource while validating every redirect target.
+ *
+ * `redirect: "follow"` would validate only the user-supplied hostname. A
+ * public host can redirect to an internal address, so redirects are followed
+ * manually and each new URL must remain HTTPS and pass the SSRF host guard.
+ */
+export async function fetchSafe(
+	url: string,
+	headers: Record<string, string>
+): Promise<Response | null> {
+	let current: URL
+	try {
+		current = new URL(url)
+	} catch {
+		return null
+	}
+
+	for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
+		if (
+			current.protocol !== "https:" ||
+			current.username !== "" ||
+			current.password !== "" ||
+			!isSafeFetchHost(current.hostname)
+		) {
+			return null
+		}
+
+		let response: Response
+		try {
+			response = await fetch(current, {
+				headers,
+				signal: AbortSignal.timeout(5000),
+				redirect: "manual"
+			})
+		} catch {
+			return null
+		}
+
+		if (response.status < 300 || response.status >= 400) return response
+		if (redirect === MAX_REDIRECTS) return null
+
+		const location = response.headers.get("Location")
+		if (!location) return null
+		try {
+			current = new URL(location, current)
+		} catch {
+			return null
+		}
+	}
+
+	return null
 }

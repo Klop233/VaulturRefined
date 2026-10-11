@@ -65,12 +65,13 @@ export async function verifyYubikeyOtp(config: Config, otp: string): Promise<voi
 
 	const response = parseYubicoResponse(text)
 
-	// Verify the response signature before trusting any of it
-	if (response.h) {
-		const expected = yubicoSign(config.yubicoSecretKey, response)
-		if (!constantTimeEqualStr(expected, response.h))
-			err("Failed to verify OTP: bad response signature")
-	}
+	// Every successful response must carry a valid signature. Treat a missing
+	// signature as a failure too; otherwise a forged status=OK response could be
+	// accepted if an upstream proxy or TLS endpoint were compromised.
+	if (!response.h) err("Failed to verify OTP: missing response signature")
+	const expected = yubicoSign(config.yubicoSecretKey, response)
+	if (!constantTimeEqualStr(expected, response.h))
+		err("Failed to verify OTP: bad response signature")
 	if (response.otp !== otp || (response.nonce != null && response.nonce !== nonce)) {
 		err("Failed to verify OTP: response mismatch")
 	}

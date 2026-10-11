@@ -77,7 +77,11 @@ export function onError(e: Error, c: Context) {
 		return c.json(errorBody(e.message), e.status)
 	}
 	if (e instanceof HTTPException) {
-		return c.json(errorBody(e.message || "Request error"), e.status as 400)
+		// Hono's body-limit middleware throws a 413 HTTPException with an
+		// empty message and a plain-text response body. Preserve the protocol's
+		// useful error text instead of returning the generic "Request error".
+		const message = e.message || (e.status === 413 ? "Payload Too Large" : "Request error")
+		return c.json(errorBody(message), e.status as 400)
 	}
 	console.error("Unhandled error:", e.stack ?? e)
 	return c.json(errorBody("Internal server error"), 500)

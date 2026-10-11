@@ -22,6 +22,37 @@ export async function checkLoginRateLimit(
 }
 
 /**
+ * Per-IP limiter for unauthenticated account bootstrap and recovery endpoints.
+ * These flows use a separate namespace from login so a burst of signup or
+ * recovery traffic cannot consume a user's login budget (and vice versa).
+ *
+ * The optional `scope` labels the caller for readability at call sites, but
+ * all registration-adjacent endpoints intentionally share one bucket. If each
+ * endpoint had its own counter, an attacker could rotate between prelogin,
+ * verification, finish, password hints, and account recovery to multiply the
+ * allowed work.
+ */
+export async function checkRegistrationRateLimit(
+	kv: KVNamespace,
+	config: Config,
+	ip: string,
+	scope: "prelogin" | "verification" | "register" | "password-hint" | "delete-recover" = "register"
+): Promise<void> {
+	const windowSeconds = 60
+	// Keep `scope` in the signature so callers document which public flow they
+	// are protecting, while sharing the actual counter across that flow.
+	void scope
+	const key = `ratelimit:registration:${ip}:${Math.floor(Date.now() / 1000 / windowSeconds)}`
+	const current = Number((await kv.get(key)) ?? "0")
+	if (current >= config.loginRatelimitMaxBurst) {
+		errCode("Too many requests. Try again later.", 429)
+	}
+	// KV has no atomic increment. This is intentionally a soft per-IP limit;
+	// deployers should use a Cloudflare WAF rule for strict edge enforcement.
+	await kv.put(key, String(current + 1), { expirationTtl: windowSeconds * 2 })
+}
+
+/**
  * Per-IP fixed-window limiter for admin authentication attempts (login POST and
  * failed bearer/cookie checks). Separate key namespace from checkLoginRateLimit.
  */

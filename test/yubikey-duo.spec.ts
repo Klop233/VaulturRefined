@@ -37,7 +37,7 @@ function yubicoSign(params: Record<string, string>): string {
 		.digest("base64")
 }
 
-function mockYubicoVerify(status = "OK") {
+function mockYubicoVerify(status = "OK", signed = true) {
 	fetchMock
 		.get("https://api.yubico.com")
 		.intercept({ method: "GET", path: (p) => p.startsWith("/wsapi/2.0/verify") })
@@ -49,7 +49,7 @@ function mockYubicoVerify(status = "OK") {
 				t: "2026-07-03T00:00:00Z0000",
 				status
 			}
-			fields.h = yubicoSign(fields)
+			if (signed) fields.h = yubicoSign(fields)
 			return Object.entries(fields)
 				.map(([k, v]) => `${k}=${v}`)
 				.join("\r\n")
@@ -65,6 +65,14 @@ describe("two-factor (yubikey)", () => {
 		const token = session.access_token
 
 		// Activation verifies the OTP against YubiCloud
+		mockYubicoVerify("OK", false)
+		const unsigned = await api(token, "POST", "/api/two-factor/yubikey", {
+			key1: otpFor(YUBI_PUBLIC_ID),
+			nfc: true,
+			masterPasswordHash: TEST_USER.masterPasswordHash
+		})
+		expect(unsigned.status).toBe(400)
+
 		mockYubicoVerify()
 		const activateRes = await api(token, "POST", "/api/two-factor/yubikey", {
 			key1: otpFor(YUBI_PUBLIC_ID),

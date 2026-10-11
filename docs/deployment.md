@@ -1,6 +1,6 @@
 # Deploying Vaultur
 
-Vaultur is a single Cloudflare Worker. One `wrangler.jsonc` deploys the API,
+Vaultur is a single Cloudflare Worker. One reviewed Wrangler config deploys the API,
 the web vault, and the scheduled jobs — everything it needs runs on
 Cloudflare:
 
@@ -44,7 +44,13 @@ pnpm wrangler d1 create vaultur
 pnpm wrangler kv namespace create VAULTUR_KV
 ```
 
-Open **`wrangler.jsonc`** and paste the two IDs:
+Create the private deployment config and paste the two IDs there:
+
+```bash
+cp wrangler.jsonc wrangler.deploy.jsonc
+```
+
+Open **`wrangler.deploy.jsonc`** and paste the two IDs:
 
 ```jsonc
 "d1_databases": [{ "binding": "VAULTUR_DB", "database_name": "vaultur",
@@ -68,7 +74,7 @@ allowance. To opt in:
 pnpm wrangler r2 bucket create vaultur-files
 ```
 
-Then uncomment/add the `r2_buckets` block in `wrangler.jsonc`:
+Then uncomment/add the `r2_buckets` block in `wrangler.deploy.jsonc`:
 
 ```jsonc
 "r2_buckets": [{ "binding": "VAULTUR_FILES", "bucket_name": "vaultur-files" }],
@@ -96,7 +102,7 @@ validates DKIM/SPF records on it directly.
 
 No domain on Cloudflare DNS? Skip this section entirely: remove the
 `send_email` binding block and `VAULTUR_EMAIL` reference from
-`wrangler.jsonc`, leave `EMAIL_FROM` unset, and Vaultur runs in **no-mail
+`wrangler.deploy.jsonc`, leave `EMAIL_FROM` unset, and Vaultur runs in **no-mail
 mode** (see the note at the end of this section). There's no SMTP fallback —
 Vaultur is built around Cloudflare Email Sending as its one mail transport by
 design, not because Workers are technically incapable of speaking SMTP.
@@ -108,7 +114,7 @@ design, not because Workers are technically incapable of speaking SMTP.
    pnpm wrangler email sending enable yourdomain.com
    ```
 
-2. Set the sender in `wrangler.jsonc` `vars`:
+2. Set the sender in `wrangler.deploy.jsonc` `vars`:
 
    ```jsonc
    "EMAIL_FROM": "vault@yourdomain.com",
@@ -173,8 +179,12 @@ Vaultur serves the official Bitwarden web vault — Vaultwarden's
 Workers static assets:
 
 ```bash
-pnpm web-vault:fetch            # latest bw_web_builds release
-pnpm web-vault:fetch v2026.4.1  # or pin a version
+pnpm web-vault:fetch            # reviewed pinned release (v2026.7.0)
+pnpm web-vault:fetch v2026.7.0  # update deliberately to a reviewed release
+
+# Optional operator-controlled digest pin (other release versions are checked
+# against that release's sha256sums.txt when this is omitted):
+WEB_VAULT_SHA256=<64-hex-digest> pnpm web-vault:fetch v2026.7.0
 ```
 
 This populates `public/web-vault/` (gitignored). If you deploy **without**
@@ -190,13 +200,14 @@ web vault is missing.
 pnpm deploy                     # bootstraps the assets dir, then wrangler deploy
 ```
 
-> **Deploy config override:** The committed `wrangler.jsonc` is an open-source
-> template with placeholder resource IDs. To deploy your own, either edit it in
-> place, or (preferred for maintainers) keep a local `wrangler.deploy.jsonc`
-> (gitignored) with your real IDs/domains — `pnpm deploy` and
-> `pnpm db:migrate:remote` auto-use it when present, falling back to
-> `wrangler.jsonc` otherwise. Override explicitly with
-> `WRANGLER_CONFIG=path`.
+> **Deploy config is required:** The committed `wrangler.jsonc` is an open-source
+> template with placeholder resource IDs and permissive test defaults. Production
+> commands refuse to use it accidentally. Copy it to the gitignored
+> `wrangler.deploy.jsonc`, then set your real D1/KV IDs, custom domain, JWT
+> secret, and restrictive production vars. `pnpm deploy` and
+> `pnpm db:migrate:remote` use that file automatically. You can point both
+> commands at another reviewed file with `WRANGLER_CONFIG=path`. For a disposable
+> test only, explicitly set `VAULTUR_ALLOW_INSECURE_TEMPLATE_DEPLOY=1`.
 
 Then point any Bitwarden client at `https://<your-worker-domain>` as the
 self-hosted server URL. The default `*.workers.dev` domain works for testing;
@@ -221,7 +232,7 @@ The official mobile apps dislike `*.workers.dev`. Add a custom domain:
 
    ```jsonc
    "routes": [{ "pattern": "vaultur.example.com", "custom_domain": true }],
-   // wrangler.jsonc vars
+   // wrangler.deploy.jsonc vars
    "DOMAIN": "https://vault.example.com"
    ```
 
@@ -450,7 +461,8 @@ vault payload remains end-to-end encrypted regardless.
 
 ## Configuration reference
 
-All non-secret settings live in `wrangler.jsonc` under `vars`. Highlights:
+All non-secret settings live in the reviewed deploy config under `vars`
+(`wrangler.deploy.jsonc` for local/CI deployments). Highlights:
 
 | Var                                  | Default        | Meaning                                                                                                                                                                                    |
 | ------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -471,7 +483,7 @@ All non-secret settings live in `wrangler.jsonc` under `vars`. Highlights:
 | `ICON_SERVICE`                       | `internal`     | `internal` (proxy+cache) or a redirect service                                                                                                                                             |
 | `ICON_CACHE_TTL_SECONDS`             | `2592000`      | KV icon cache TTL (30 days)                                                                                                                                                                |
 | `LOGIN_ALLOWED_EMAILS`               | _(empty)_      | Comma-separated emails allowed to log in or register; enforced on every grant type. Empty = all accounts. Also editable in the admin panel ("Allowed login emails"). Outranks invitations. |
-| `LOGIN_RATELIMIT_MAX_BURST`          | `10`           | Login attempts per IP per minute (soft, KV-based)                                                                                                                                          |
+| `LOGIN_RATELIMIT_MAX_BURST`          | `10`           | Login and unauthenticated registration/recovery attempts per IP per minute (soft, KV-based; separate buckets)                                                                              |
 | `LOGIN_RATELIMIT_USER_MAX_FAILURES`  | `5`            | Failed login attempts per account per minute before a temporary 429 lockout (counts failures only; per-IP limit is separate)                                                               |
 | `ADMIN_SESSION_LIFETIME_MINUTES`     | `20`           | Admin cookie lifetime                                                                                                                                                                      |
 
@@ -558,7 +570,7 @@ deploy`), which skips D1 migrations entirely — that logic lives in the
 
 Fix it in **Settings → Build** on the Worker:
 
-- **Build command**: `pnpm install && pnpm run web-vault:fetch`
+- **Build command**: `pnpm install && pnpm run web-vault:fetch && cp wrangler.jsonc wrangler.deploy.jsonc`
 - **Deploy command**: `pnpm deploy` — applies pending D1 migrations, then
   runs `wrangler deploy`.
 
@@ -582,10 +594,12 @@ as a **build variable** (Settings → Build → "environment variables and
 secrets accessible only to your build", not the runtime Variables & Secrets
 tab) named `GITHUB_TOKEN`. `fetch-web-vault.sh` picks it up automatically.
 
-Since this path deploys straight from the committed `wrangler.jsonc` (the
-gitignored `wrangler.deploy.jsonc` override never reaches Cloudflare's build
-environment), real D1/KV resource IDs must be edited directly into
-`wrangler.jsonc` for this flow rather than kept in a local-only override.
+Because this build starts from a clean checkout, it creates the ignored deploy
+config before running `pnpm deploy`. If you use this flow, keep a reviewed
+`wrangler.jsonc` with real resource IDs, a custom domain, and restrictive
+non-secret vars in the repository, and keep all secrets in Cloudflare's runtime
+secret store. Do not set `VAULTUR_ALLOW_INSECURE_TEMPLATE_DEPLOY` for a public
+deployment.
 
 ---
 

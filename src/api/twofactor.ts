@@ -1,17 +1,22 @@
 import { and, eq } from "drizzle-orm"
 import { Hono } from "hono"
 import type { Context } from "hono"
+import { bodyLimit } from "hono/body-limit"
 
 import { requireAuth, auth } from "../auth/middleware"
 import { loginAllowed, webauthnSupported, yubicoConfigured } from "../config"
 import { verifyPassword } from "../crypto"
 import { devices, nowDb, twofactor, users, type Db, type User } from "../db"
 import type { AppEnv } from "../env"
-import { err } from "../error"
+import { err, errorBody } from "../error"
 import { duoApiRequest, getUserDuoData, type DuoData } from "../services/duo"
 import { logUserEvent } from "../services/events"
 import { createMailer, mail } from "../services/mail"
-import { checkUserLoginFailureLimit, recordUserLoginFailure } from "../services/ratelimit"
+import {
+	checkLoginRateLimit,
+	checkUserLoginFailureLimit,
+	recordUserLoginFailure
+} from "../services/ratelimit"
 import {
 	findTwoFactors,
 	sendEmailLoginToken,
@@ -36,6 +41,11 @@ import { ci, normalizeEmail, randomBytes, randomNumericCode, uuid } from "../uti
 export const twofactorRoutes = new Hono<AppEnv>()
 
 type Ctx = Context<AppEnv>
+
+const publicAuthBodyLimit = bodyLimit({
+	maxSize: 16 * 1024,
+	onError: (c) => c.json(errorBody("Payload Too Large"), 413)
+})
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
@@ -91,7 +101,8 @@ async function ensureRecoveryCode(db: Db, user: User): Promise<void> {
 // Public endpoints (credentials in body, no bearer token)
 // ---------------------------------------------------------------------------
 
-twofactorRoutes.post("/two-factor/send-email-login", async (c) => {
+twofactorRoutes.post("/two-factor/send-email-login", publicAuthBodyLimit, async (c) => {
+	await checkLoginRateLimit(c.env.VAULTUR_KV, c.get("config"), c.get("ip"))
 	const body = (await c.req.json()) as Record<string, unknown>
 	const email = normalizeEmail(String(ci(body, "email") ?? ""))
 	const passwordHash = ci<string>(body, "masterPasswordHash")
@@ -117,7 +128,8 @@ twofactorRoutes.post("/two-factor/send-email-login", async (c) => {
 	return c.body(null, 200)
 })
 
-twofactorRoutes.post("/two-factor/recover", async (c) => {
+twofactorRoutes.post("/two-factor/recover", publicAuthBodyLimit, async (c) => {
+	await checkLoginRateLimit(c.env.VAULTUR_KV, c.get("config"), c.get("ip"))
 	const body = (await c.req.json()) as Record<string, unknown>
 	const email = normalizeEmail(String(ci(body, "email") ?? ""))
 	const passwordHash = ci<string>(body, "masterPasswordHash")

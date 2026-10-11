@@ -200,14 +200,18 @@ perl -i -pe 's#^ADMIN_TOKEN=.*#ADMIN_TOKEN="'"$(openssl rand -base64 48 | tr -d 
 
 ```bash
 pnpm wrangler login
-pnpm wrangler d1 create vaultur                       # paste the id into wrangler.jsonc
-pnpm wrangler kv namespace create VAULTUR_KV          # paste the id into wrangler.jsonc
+cp wrangler.jsonc wrangler.deploy.jsonc
+pnpm wrangler d1 create vaultur                       # paste the id into wrangler.deploy.jsonc
+pnpm wrangler kv namespace create VAULTUR_KV          # paste the id into wrangler.deploy.jsonc
 openssl rand -base64 64 | tr -d '\n' | pnpm wrangler secret put JWT_SECRET
 pnpm db:migrate:remote
 pnpm deploy
 ```
 
-That's the minimum to get a running server on the Cloudflare free tier —
+Set a custom domain and restrictive production vars in the private
+`wrangler.deploy.jsonc` before deploying; the committed template is rejected
+by the deploy scripts by default. That's the minimum to get a running server
+on the Cloudflare free tier —
 attachments and file Sends work out of the box, stored in KV (25 MiB/file
 cap). For R2 storage (500 MB/file, needs a paid Cloudflare plan), email
 sending, a custom domain, mobile push, and the full configuration reference,
@@ -220,7 +224,7 @@ this repo: **"Create Worker" → import a Git repository**, point it at your
 fork, and override the auto-detected commands — the auto-detected Deploy
 command is a bare `wrangler deploy`, which silently skips D1 migrations:
 
-- **Build command**: `pnpm install && pnpm run web-vault:fetch`
+- **Build command**: `pnpm install && pnpm run web-vault:fetch && cp wrangler.jsonc wrangler.deploy.jsonc`
 - **Deploy command**: `pnpm deploy`
 
 Two things the free tier needs added before the first deploy succeeds:
@@ -236,9 +240,10 @@ Two things the free tier needs added before the first deploy succeeds:
   without one.
 
 The auto-generated API token this flow provisions also needs **D1 Edit**
-permission for the migration step, and since this path never sees the
-gitignored `wrangler.deploy.jsonc`, real D1/KV/R2 resource IDs go directly
-into the committed `wrangler.jsonc`. Full detail and troubleshooting:
+permission for the migration step. The build command copies the reviewed
+non-secret deployment config into the ignored `wrangler.deploy.jsonc`; keep
+all secrets in Cloudflare's runtime secret store. Full detail and
+troubleshooting:
 **[docs/deployment.md](docs/deployment.md#cloudflares-native-git-integration-workers-builds)**.
 
 ### Storage: KV vs R2

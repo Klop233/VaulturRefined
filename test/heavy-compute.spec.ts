@@ -66,4 +66,32 @@ describe("HeavyCompute Durable Object", () => {
 		const res = await stub.fetch("https://heavy/unknown", { method: "POST" })
 		expect(res.status).toBe(404)
 	})
+
+	it("rejects malformed or unbounded PBKDF2 requests", async () => {
+		const bindings = env as unknown as Bindings
+		const ns = bindings.VAULTUR_HEAVY
+		if (!ns) throw new Error("VAULTUR_HEAVY binding not configured in test")
+
+		const id = ns.idFromName("vaultur:heavy")
+		const stub = ns.get(id)
+		const valid = {
+			password: b64Encode(new TextEncoder().encode(TEST_PASSWORD)),
+			salt: b64Encode(new TextEncoder().encode(TEST_SALT)),
+			iterations: TEST_ITERATIONS,
+			dkLen: TEST_DKLEN
+		}
+		const requests: RequestInit[] = [
+			{ method: "POST", body: "not-json" },
+			{ method: "POST", body: JSON.stringify(null) },
+			{ method: "POST", body: JSON.stringify([]) },
+			{ method: "POST", body: JSON.stringify({ ...valid, password: "%%%" }) },
+			{ method: "POST", body: JSON.stringify({ ...valid, iterations: 2_000_001 }) },
+			{ method: "POST", body: JSON.stringify({ ...valid, dkLen: 65 }) }
+		]
+
+		for (const init of requests) {
+			const res = await stub.fetch("https://heavy/pbkdf2", init)
+			expect(res.status).toBe(400)
+		}
+	})
 }, 30_000 /* DO tests may be slow in simulated miniflare */)

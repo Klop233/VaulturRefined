@@ -106,6 +106,12 @@ cipherRoutes.get("/ciphers/organization-details", async (c) => {
 	if (!orgId) err("organizationId parameter missing")
 	const member = await findConfirmedMembership(db, user.uuid, orgId)
 	if (!member) notFound("You are not a member of this organization")
+	// This endpoint is the organization admin-console vault view. A regular
+	// member must never receive a complete organization cipher listing: unlike
+	// the normal user sync path, `syncType: "org"` intentionally serializes
+	// every row it is given. Match vaultwarden and require organization-wide
+	// access before loading any cipher data.
+	if (!hasFullAccess(member)) notFound("You do not have permission to view this organization vault")
 
 	const sync = await loadCipherSyncData(db, user.uuid, "org", orgId)
 	const rows = await db.select().from(ciphers).where(eq(ciphers.organizationUuid, orgId))

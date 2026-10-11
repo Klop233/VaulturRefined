@@ -976,8 +976,16 @@ async function upsertGroup(c: Ctx, existing: Group | null) {
 	}
 
 	for (const a of parseAssignments(ci(body, "collections"))) {
+		// Do not allow an organization admin to attach a collection owned by a
+		// different organization to this group's ACL. Apart from corrupting the
+		// ACL graph, that can grant cross-organization access to members who belong
+		// to both organizations. The collection must be scoped to this org.
+		const collection = await db.query.collections.findFirst({
+			where: and(eq(collections.uuid, a.id), eq(collections.orgUuid, orgId))
+		})
+		if (!collection) continue
 		await db.insert(collectionsGroups).values({
-			collectionsUuid: a.id,
+			collectionsUuid: collection.uuid,
 			groupsUuid: group.uuid,
 			readOnly: a.readOnly,
 			hidePasswords: a.hidePasswords,

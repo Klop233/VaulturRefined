@@ -20,7 +20,7 @@
 	"packageManager": "pnpm@11.9.0",
 	"scripts": {
 		"dev": "bash scripts/ensure-web-vault.sh && wrangler dev",
-		"deploy": "bash scripts/ensure-web-vault.sh && sh -c 'CFG=\"$(bash scripts/resolve-wrangler-config.sh)\"; wrangler deploy --config \"$CFG\" && wrangler d1 migrations apply vaultur --remote --config \"$CFG\"'",
+		"deploy": "bash scripts/ensure-web-vault.sh && sh -c 'CFG=\"$(bash scripts/resolve-wrangler-config.sh)\"; wrangler d1 migrations apply vaultur --remote --config \"$CFG\" && wrangler deploy --config \"$CFG\"'",
 		"build": "pnpm run web-vault:fetch && bash scripts/ensure-web-vault.sh && wrangler deploy --dry-run --outdir dist",
 		"test": "vitest run",
 		"test:heavy": "vitest run --config vitest.heavy.config.ts",
@@ -41,7 +41,7 @@
 		"@simplewebauthn/server": "^13.3.2",
 		"drizzle-orm": "^0.45.2",
 		"es-toolkit": "^1.49.0",
-		"hono": "^4.12.27",
+		"hono": "^4.13.13",
 		"jose": "^6.2.3",
 		"mimetext": "^3.0.28",
 		"otpauth": "^9.5.1"

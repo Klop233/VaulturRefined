@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { fetchSafe } from "../src/api/icons"
 import {
 	expandIpv6,
 	getSafeHost,
@@ -10,11 +11,33 @@ import {
 } from "../src/services/ssrf"
 import { obscureEmail } from "../src/services/twofactor"
 
+afterEach(() => vi.unstubAllGlobals())
+
 /**
  * Ports vaultwarden's src/http_client.rs SSRF tests — the icon proxy fetches
  * arbitrary hosts server-side, so these encodings must all be blocked.
  */
 describe("ssrf host validation", () => {
+	it("rejects redirects to private or non-HTTPS hosts", async () => {
+		const fetch = vi.fn<typeof globalThis.fetch>()
+		vi.stubGlobal("fetch", fetch)
+
+		fetch.mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: { Location: "https://127.0.0.1/metadata" }
+			})
+		)
+		expect(await fetchSafe("https://public.example/icon.png", {})).toBeNull()
+		expect(fetch).toHaveBeenCalledTimes(1)
+
+		fetch.mockResolvedValueOnce(
+			new Response(null, { status: 302, headers: { Location: "http://public.example/icon" } })
+		)
+		expect(await fetchSafe("https://public.example/icon.png", {})).toBeNull()
+		expect(fetch).toHaveBeenCalledTimes(2)
+	})
+
 	it("normalises decimal / hex / octal IPv4 encodings", () => {
 		expect(parseToIpv4("2130706433")).toEqual([127, 0, 0, 1]) // decimal loopback
 		expect(parseToIpv4("0x7f000001")).toEqual([127, 0, 0, 1]) // hex loopback

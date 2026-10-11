@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm"
 import { Hono } from "hono"
 import type { Context } from "hono"
+import { bodyLimit } from "hono/body-limit"
 
 import { basicClaims, decodeJwt, encodeJwt, issuer } from "../auth/jwt"
 import { requireAuth, auth } from "../auth/middleware"
@@ -19,12 +20,13 @@ import {
 	type User
 } from "../db"
 import type { AppEnv } from "../env"
-import { err, errCode, notFound, unauthorized } from "../error"
+import { err, errCode, errorBody, notFound, unauthorized } from "../error"
 import { parseCipherData, updateCipherFromData } from "../services/ciphers"
 import { logUserEvent } from "../services/events"
 import { createMailer, mail } from "../services/mail"
 import { Notify } from "../services/notify"
 import { masterPasswordPolicy } from "../services/policies"
+import { checkRegistrationRateLimit } from "../services/ratelimit"
 import {
 	findUserByEmail,
 	generateApiKey,
@@ -40,10 +42,20 @@ export const accountRoutes = new Hono<AppEnv>()
 
 type Ctx = Context<AppEnv>
 
+const preloginBodyLimit = bodyLimit({
+	maxSize: 8 * 1024,
+	onError: (c) => c.json(errorBody("Payload Too Large"), 413)
+})
+const publicAccountBodyLimit = bodyLimit({
+	maxSize: 16 * 1024,
+	onError: (c) => c.json(errorBody("Payload Too Large"), 413)
+})
+
 // Public endpoints first (no auth)
 
 // Some clients call prelogin under /api as well as /identity.
-accountRoutes.post("/accounts/prelogin", async (c) => {
+accountRoutes.post("/accounts/prelogin", preloginBodyLimit, async (c) => {
+	await checkRegistrationRateLimit(c.env.VAULTUR_KV, c.get("config"), c.get("ip"), "prelogin")
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
 	const email = String(ci(body, "email") ?? "")
 	const user = email ? await findUserByEmail(c.get("db"), email) : undefined
@@ -54,8 +66,9 @@ accountRoutes.post("/accounts/prelogin", async (c) => {
 		kdfParallelism: user?.clientKdfParallelism ?? null
 	})
 })
-accountRoutes.post("/accounts/password-hint", async (c) => {
+accountRoutes.post("/accounts/password-hint", publicAccountBodyLimit, async (c) => {
 	const config = c.get("config")
+	await checkRegistrationRateLimit(c.env.VAULTUR_KV, config, c.get("ip"), "password-hint")
 	const body = (await c.req.json()) as Record<string, unknown>
 	const email = normalizeEmail(String(ci(body, "email") ?? ""))
 	if (!email) err("The field Email is required.")
@@ -80,7 +93,7 @@ accountRoutes.post("/accounts/password-hint", async (c) => {
 })
 
 // Email verification callback (public; token authenticated)
-accountRoutes.post("/accounts/verify-email-token", async (c) => {
+accountRoutes.post("/accounts/verify-email-token", publicAccountBodyLimit, async (c) => {
 	const body = (await c.req.json()) as Record<string, unknown>
 	const userId = ci<string>(body, "userId")
 	const token = ci<string>(body, "token")
@@ -109,8 +122,9 @@ accountRoutes.post("/accounts/verify-email-token", async (c) => {
 
 // Account recovery delete (public; requests the deletion email) — vaultwarden
 // names this /accounts/delete-recover.
-accountRoutes.post("/accounts/delete-recover", async (c) => {
+accountRoutes.post("/accounts/delete-recover", publicAccountBodyLimit, async (c) => {
 	const config = c.get("config")
+	await checkRegistrationRateLimit(c.env.VAULTUR_KV, config, c.get("ip"), "delete-recover")
 	const body = (await c.req.json()) as Record<string, unknown>
 	const email = normalizeEmail(String(ci(body, "email") ?? ""))
 	const mailer = createMailer(c.env.VAULTUR_EMAIL, config)
@@ -127,7 +141,7 @@ accountRoutes.post("/accounts/delete-recover", async (c) => {
 	return c.body(null, 200)
 })
 
-accountRoutes.post("/accounts/delete-recover-token", async (c) => {
+accountRoutes.post("/accounts/delete-recover-token", publicAccountBodyLimit, async (c) => {
 	const body = (await c.req.json()) as Record<string, unknown>
 	const userId = ci<string>(body, "userId")
 	const token = ci<string>(body, "token")
@@ -470,19 +484,22 @@ accountRoutes.post("/accounts/email-token", async (c) => {
 	const db = c.get("db")
 	if (await findUserByEmail(db, newEmail)) err("Email already in use")
 
+	// The confirmation token is delivered only by email. Never write it to
+	// Worker logs as a development convenience: Cloudflare invocation logs are
+	// accessible to anyone with observability access and would allow an attacker
+	// who obtains a log to complete an email change. No-mail deployments must
+	// reject this flow explicitly instead.
+	const mailer = createMailer(c.env.VAULTUR_EMAIL, config)
+	if (!mailer.enabled) err("Email change requires email sending to be configured")
+
 	const token = randomNumericCode(6)
 	await db
 		.update(users)
 		.set({ emailNew: newEmail, emailNewToken: token, updatedAt: nowDb() })
 		.where(eq(users.uuid, user.uuid))
 
-	const mailer = createMailer(c.env.VAULTUR_EMAIL, config)
-	if (mailer.enabled) {
-		c.executionCtx.waitUntil(mail.changeEmail(mailer, config, newEmail, token))
-		c.executionCtx.waitUntil(mail.changeEmailExisting(mailer, config, user.email, newEmail))
-	} else {
-		console.warn(`Email change token for ${user.email}: ${token}`)
-	}
+	c.executionCtx.waitUntil(mail.changeEmail(mailer, config, newEmail, token))
+	c.executionCtx.waitUntil(mail.changeEmailExisting(mailer, config, user.email, newEmail))
 	return c.body(null, 200)
 })
 

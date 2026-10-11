@@ -735,7 +735,10 @@ organizationRoutes.put("/organizations/:orgId/collections/:colId/users", async (
 organizationRoutes.get("/organizations/:orgId/details", async (c) => {
 	const { user } = auth(c)
 	const orgId = c.req.param("orgId")
-	await requireMember(c, orgId, MembershipType.User)
+	const member = await requireMember(c, orgId, MembershipType.User)
+	// This is the organization admin-console vault view. A regular member must
+	// not receive every cipher in the organization.
+	if (!hasFullAccess(member)) notFound("You do not have permission to view this organization vault")
 	const db = c.get("db")
 
 	const sync = await loadCipherSyncData(db, user.uuid, "org", orgId)
