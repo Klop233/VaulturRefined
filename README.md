@@ -198,6 +198,14 @@ perl -i -pe 's#^ADMIN_TOKEN=.*#ADMIN_TOKEN="'"$(openssl rand -base64 48 | tr -d 
 
 ### Deploy your own
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Klop233/VaulturRefined)
+
+The button opens Cloudflare's deployment flow for this repository. On the first
+deployment, create the D1 and KV resources, set `JWT_SECRET`, and review the
+production settings before deploying. The button cannot safely provision those
+account-specific resources or secrets automatically; follow the configuration
+steps below and [the full deployment guide](docs/deployment.md).
+
 ```bash
 pnpm wrangler login
 cp wrangler.jsonc wrangler.deploy.jsonc
