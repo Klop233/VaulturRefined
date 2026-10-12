@@ -44,7 +44,7 @@
 		"hono": "^4.13.13",
 		"jose": "^6.2.3",
 		"mimetext": "^3.0.28",
-		"otpauth": "^9.5.1"
+		"otpauth": "^9.5.2"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.8.71",
