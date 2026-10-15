@@ -28,6 +28,55 @@ describe("identity", () => {
 		})
 	})
 
+	it("password prelogin returns nested defaults and a normalized salt for an unknown user", async () => {
+		const res = await SELF.fetch("https://vault.test/identity/accounts/prelogin/password", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ Email: " Nobody@Vaultur.Dev " })
+		})
+		expect(res.status).toBe(200)
+		expect(await res.json()).toEqual({
+			kdfSettings: { kdfType: 0, iterations: 600_000, memory: null, parallelism: null },
+			salt: "nobody@vaultur.dev"
+		})
+	})
+
+	it.each([
+		{ kdf: 0, kdfIterations: 800_000, kdfMemory: null, kdfParallelism: null },
+		{ kdf: 1, kdfIterations: 3, kdfMemory: 64, kdfParallelism: 4 }
+	])("password prelogin preserves stored KDF parameters ($kdf)", async (settings) => {
+		const reg = await registerUser(settings)
+		expect(reg.status).toBe(200)
+		const res = await SELF.fetch("https://vault.test/identity/accounts/prelogin/password", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: ` ${TEST_USER.email.toUpperCase()} ` })
+		})
+		expect(res.status).toBe(200)
+		expect(await res.json()).toEqual({
+			kdfSettings: {
+				kdfType: settings.kdf,
+				iterations: settings.kdfIterations,
+				memory: settings.kdfMemory,
+				parallelism: settings.kdfParallelism
+			},
+			salt: TEST_USER.email
+		})
+
+		// Existing clients must continue receiving the flat prelogin response.
+		for (const prefix of ["/identity", "/api"]) {
+			const legacy = await SELF.fetch(`https://vault.test${prefix}/accounts/prelogin`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ email: TEST_USER.email })
+			})
+			expect(legacy.status).toBe(200)
+			expect(await legacy.json()).toEqual(settings)
+		}
+		// Server-side password verification still works for either client KDF.
+		expect((await login()).status).toBe(200)
+	})
+
 	it("registers a new user and logs in", async () => {
 		const reg = await registerUser()
 		expect(reg.status).toBe(200)

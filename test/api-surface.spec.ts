@@ -33,7 +33,18 @@ describe("additional API surface", () => {
 				body: JSON.stringify({ email: TEST_USER.email })
 			})
 			expect(res.status).toBe(200)
-			expect(((await res.json()) as Record<string, any>).kdfIterations).toBe(600_000)
+			const body = (await res.json()) as Record<string, any>
+			if (url.endsWith("/password")) {
+				expect(body.kdfSettings).toEqual({
+					kdfType: 0,
+					iterations: 600_000,
+					memory: null,
+					parallelism: null
+				})
+				expect(body.salt).toBe(TEST_USER.email)
+			} else {
+				expect(body.kdfIterations).toBe(600_000)
+			}
 		}
 	})
 

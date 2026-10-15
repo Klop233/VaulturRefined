@@ -713,9 +713,23 @@ async function organizationApiKeyLogin(
 async function prelogin(c: Context<AppEnv>) {
 	await checkRegistrationRateLimit(c.env.VAULTUR_KV, c.get("config"), c.get("ip"), "prelogin")
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
-	const email = String(ci(body, "email") ?? "")
+	const email = normalizeEmail(String(ci(body, "email") ?? ""))
 	const db = c.get("db")
 	const user = email ? await findUserByEmail(db, email) : undefined
+
+	// Password prelogin has a different contract from the legacy endpoint.
+	// Current clients parse KdfSettings before deriving a key with Salt.
+	if (c.req.path.endsWith("/password")) {
+		return c.json({
+			kdfSettings: {
+				kdfType: user?.clientKdfType ?? KdfType.Pbkdf2,
+				iterations: user?.clientKdfIter ?? 600_000,
+				memory: user?.clientKdfMemory ?? null,
+				parallelism: user?.clientKdfParallelism ?? null
+			},
+			salt: user?.email ?? email
+		})
+	}
 
 	return c.json({
 		kdf: user?.clientKdfType ?? KdfType.Pbkdf2,
