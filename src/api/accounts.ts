@@ -31,6 +31,7 @@ import {
 	findUserByEmail,
 	generateApiKey,
 	passwordFields,
+	preloginResponse,
 	stampException,
 	touchUser
 } from "../services/users"
@@ -59,12 +60,7 @@ accountRoutes.post("/accounts/prelogin", preloginBodyLimit, async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
 	const email = String(ci(body, "email") ?? "")
 	const user = email ? await findUserByEmail(c.get("db"), email) : undefined
-	return c.json({
-		kdf: user?.clientKdfType ?? 0,
-		kdfIterations: user?.clientKdfIter ?? 600_000,
-		kdfMemory: user?.clientKdfMemory ?? null,
-		kdfParallelism: user?.clientKdfParallelism ?? null
-	})
+	return c.json(preloginResponse(user))
 })
 accountRoutes.post("/accounts/password-hint", publicAccountBodyLimit, async (c) => {
 	const config = c.get("config")

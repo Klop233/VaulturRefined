@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url"
+
 import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-workers/config"
 
 // Proves the free-tier fallback path: no r2Buckets binding, so getBlobStore()
@@ -5,7 +7,7 @@ import { defineWorkersConfig, readD1Migrations } from "@cloudflare/vitest-pool-w
 // sends specs as the main suite — separate config only because bindings are
 // fixed per miniflare instance, so R2-bound and R2-unbound runs can't share one.
 export default defineWorkersConfig(async () => {
-	const migrationsPath = new URL("./migrations", import.meta.url).pathname
+	const migrationsPath = fileURLToPath(new URL("./migrations", import.meta.url))
 	const migrations = await readD1Migrations(migrationsPath)
 
 	return {

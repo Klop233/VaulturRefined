@@ -24,11 +24,13 @@ describe("identity", () => {
 			kdf: 0,
 			kdfIterations: 600_000,
 			kdfMemory: null,
-			kdfParallelism: null
+			kdfParallelism: null,
+			kdfSettings: { kdfType: 0, iterations: 600_000, memory: null, parallelism: null },
+			salt: null
 		})
 	})
 
-	it("password prelogin returns nested defaults and a normalized salt for an unknown user", async () => {
+	it("password prelogin returns the compatible response for an unknown user", async () => {
 		const res = await SELF.fetch("https://vault.test/identity/accounts/prelogin/password", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -36,8 +38,12 @@ describe("identity", () => {
 		})
 		expect(res.status).toBe(200)
 		expect(await res.json()).toEqual({
+			kdf: 0,
+			kdfIterations: 600_000,
+			kdfMemory: null,
+			kdfParallelism: null,
 			kdfSettings: { kdfType: 0, iterations: 600_000, memory: null, parallelism: null },
-			salt: "nobody@vaultur.dev"
+			salt: null
 		})
 	})
 
@@ -54,6 +60,10 @@ describe("identity", () => {
 		})
 		expect(res.status).toBe(200)
 		expect(await res.json()).toEqual({
+			kdf: settings.kdf,
+			kdfIterations: settings.kdfIterations,
+			kdfMemory: settings.kdfMemory,
+			kdfParallelism: settings.kdfParallelism,
 			kdfSettings: {
 				kdfType: settings.kdf,
 				iterations: settings.kdfIterations,
@@ -63,7 +73,7 @@ describe("identity", () => {
 			salt: TEST_USER.email
 		})
 
-		// Existing clients must continue receiving the flat prelogin response.
+		// Existing clients must continue receiving the flat fields as well.
 		for (const prefix of ["/identity", "/api"]) {
 			const legacy = await SELF.fetch(`https://vault.test${prefix}/accounts/prelogin`, {
 				method: "POST",
@@ -71,7 +81,16 @@ describe("identity", () => {
 				body: JSON.stringify({ email: TEST_USER.email })
 			})
 			expect(legacy.status).toBe(200)
-			expect(await legacy.json()).toEqual(settings)
+			expect(await legacy.json()).toEqual({
+				...settings,
+				kdfSettings: {
+					kdfType: settings.kdf,
+					iterations: settings.kdfIterations,
+					memory: settings.kdfMemory,
+					parallelism: settings.kdfParallelism
+				},
+				salt: TEST_USER.email
+			})
 		}
 		// Server-side password verification still works for either client KDF.
 		expect((await login()).status).toBe(200)

@@ -42,7 +42,13 @@ import {
 	sha256Hex
 } from "../services/sso"
 import { twofactorAuth } from "../services/twofactor"
-import { findUserByEmail, newUserShell, passwordFields, touchUser } from "../services/users"
+import {
+	findUserByEmail,
+	newUserShell,
+	passwordFields,
+	preloginResponse,
+	touchUser
+} from "../services/users"
 import { DeviceType, EventType, KdfType, MembershipStatus } from "../shared"
 import { ci, constantTimeEqualStr, normalizeEmail, randomBytes, uuid } from "../util"
 
@@ -717,26 +723,7 @@ async function prelogin(c: Context<AppEnv>) {
 	const db = c.get("db")
 	const user = email ? await findUserByEmail(db, email) : undefined
 
-	// Password prelogin has a different contract from the legacy endpoint.
-	// Current clients parse KdfSettings before deriving a key with Salt.
-	if (c.req.path.endsWith("/password")) {
-		return c.json({
-			kdfSettings: {
-				kdfType: user?.clientKdfType ?? KdfType.Pbkdf2,
-				iterations: user?.clientKdfIter ?? 600_000,
-				memory: user?.clientKdfMemory ?? null,
-				parallelism: user?.clientKdfParallelism ?? null
-			},
-			salt: user?.email ?? email
-		})
-	}
-
-	return c.json({
-		kdf: user?.clientKdfType ?? KdfType.Pbkdf2,
-		kdfIterations: user?.clientKdfIter ?? 600_000,
-		kdfMemory: user?.clientKdfMemory ?? null,
-		kdfParallelism: user?.clientKdfParallelism ?? null
-	})
+	return c.json(preloginResponse(user))
 }
 identityRoutes.post("/accounts/prelogin", preloginBodyLimit, prelogin)
 identityRoutes.post("/accounts/prelogin/password", preloginBodyLimit, prelogin)

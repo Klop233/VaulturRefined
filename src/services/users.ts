@@ -9,6 +9,38 @@ export async function findUserByEmail(db: Db, email: string): Promise<User | und
 	return db.query.users.findFirst({ where: eq(users.email, normalizeEmail(email)) })
 }
 
+/**
+ * Builds the prelogin response understood by both legacy and current Bitwarden
+ * clients. Current clients read the nested KdfSettings object, while older
+ * clients still read the flat fields.
+ */
+export function preloginResponse(
+	user?: Pick<
+		User,
+		"clientKdfType" | "clientKdfIter" | "clientKdfMemory" | "clientKdfParallelism" | "email"
+	>
+) {
+	const kdfType = user?.clientKdfType ?? KdfType.Pbkdf2
+	const iterations = user?.clientKdfIter ?? KDF_DEFAULTS.pbkdf2Iterations
+	const memory = user?.clientKdfMemory ?? null
+	const parallelism = user?.clientKdfParallelism ?? null
+
+	return {
+		kdf: kdfType,
+		kdfIterations: iterations,
+		kdfMemory: memory,
+		kdfParallelism: parallelism,
+		kdfSettings: {
+			kdfType,
+			iterations,
+			memory,
+			parallelism
+		},
+		// Do not reveal an email-derived salt for unknown accounts.
+		salt: user?.email ?? null
+	}
+}
+
 export async function findUserByUuid(db: Db, userUuid: string): Promise<User | undefined> {
 	return db.query.users.findFirst({ where: eq(users.uuid, userUuid) })
 }
